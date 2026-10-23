@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prompt Leak Checker + Governance Decision</title>
+<style>
+  :root { --green:#1e7e34; --amber:#b58900; --red:#b3261e; --ink:#1a1a2e; --muted:#5a5a72; --line:#ddd; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin:0; background:#f6f7fb; color:var(--ink); }
+  main { max-width: 880px; margin: 0 auto; padding: 28px 18px 60px; }
+  h1 { font-size: 26px; margin: 0 0 6px; }
+  .sub { color: var(--muted); margin: 0 0 22px; line-height: 1.5; }
+  label { display:block; font-weight:600; margin: 16px 0 6px; }
+  textarea, select, input { width:100%; padding:10px 12px; border:1px solid #bbb; border-radius:8px; font-size:15px; background:#fff; }
+  textarea { min-height: 150px; resize: vertical; line-height:1.5; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; margin-top:18px; }
+  button { border:0; border-radius:8px; padding:11px 18px; font-size:15px; font-weight:600; cursor:pointer; }
+  .primary { background: var(--ink); color:#fff; }
+  .secondary { background:#e8eaf3; color:var(--ink); }
+  button:disabled { opacity:.55; cursor:wait; }
+  #results { margin-top: 28px; display:none; }
+  .banner { border-radius:12px; padding:18px 20px; color:#fff; }
+  .banner.allow { background: var(--green); }
+  .banner.redact { background: var(--amber); }
+  .banner.block { background: var(--red); }
+  .banner .decision { font-size:24px; font-weight:800; margin:0; }
+  .banner .mode { font-size:13px; opacity:.9; margin-top:4px; }
+  .meter-wrap { background:#e8eaf3; border-radius:999px; height:16px; margin:10px 0 4px; overflow:hidden; }
+  .meter { height:100%; border-radius:999px; transition: width .4s ease; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-top:12px; }
+  .card h3 { margin:0 0 6px; font-size:16px; }
+  .tag { display:inline-block; font-size:12px; font-weight:700; padding:2px 9px; border-radius:999px; background:#eef; margin-right:6px; }
+  .tag.sev { background:#fdecea; color:#7a130d; }
+  code.snippet { background:#f3f3f8; padding:2px 6px; border-radius:5px; word-break:break-all; }
+  pre.redacted { background:#101828; color:#d3f8df; padding:14px; border-radius:10px; white-space:pre-wrap; word-break:break-word; line-height:1.5; }
+  .error { background:#fdecea; border:1px solid #f5c6c2; color:#7a130d; border-radius:10px; padding:14px 16px; margin-top:20px; display:none; }
+  .small { color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Prompt Leak Checker</h1>
+  <p class="sub">Before you paste text into an AI tool, check it here first. This app flags
+     personal data (PII), secrets and credentials, and confidential company information,
+     gives you a redacted safe version, and makes a governance decision:
+     <strong>Allow</strong>, <strong>Redact &amp; Send</strong>, or <strong>Block &amp; Escalate</strong>.</p>
+
+  <label for="prompt_text">Text you are about to send</label>
+  <textarea id="prompt_text" placeholder="Paste the prompt / text you want to check..."></textarea>
+
+  <label for="destination_tool">Destination AI tool</label>
+  <select id="destination_tool">
+    <option>Public ChatGPT</option>
+    <option>Public Gemini</option>
+    <option>Company-approved AI tool</option>
+    <option>Other public AI tool</option>
+  </select>
+
+  <label for="data_context">Context (optional) - what kind of data is this about?</label>
+  <input id="data_context" placeholder="e.g. customer support ticket, internal project notes, my own writing">
+
+  <div class="row">
+    <button class="primary" id="check_btn">Check Prompt</button>
+    <button class="secondary" id="leaky_btn" type="button">Load a leaky example</button>
+    <button class="secondary" id="safe_btn" type="button">Load a safe example</button>
+  </div>
+  <p class="small">Examples use only FAKE data, invented for this demo.</p>
+
+  <div class="error" id="error_box"></div>
+
+  <section id="results">
+    <div class="banner" id="banner">
+      <p class="decision" id="decision_text"></p>
+      <p class="mode" id="mode_text"></p>
+    </div>
+
+    <h2 style="margin-bottom:2px;">Risk score: <span id="risk_score"></span> / 100 (<span id="risk_level"></span>)</h2>
+    <div class="meter-wrap"><div class="meter" id="meter"></div></div>
+    <p id="summary"></p>
+
+    <h2>Findings</h2>
+    <div id="findings"><p class="small">No findings.</p></div>
+
+    <h2>Redacted safe version</h2>
+    <pre class="redacted" id="redacted_text"></pre>
+    <div class="row" style="margin-top:8px;">
+      <button class="secondary" id="copy_btn" type="button">Copy redacted text</button>
+      <span class="small" id="copy_note"></span>
+    </div>
+
+    <h2>Policy reason</h2>
+    <p id="policy_reason"></p>
+  </section>
+
+  <p class="small" style="margin-top:36px;">This checker reduces risk - it is not a guarantee that text is safe,
+     and it is not legal advice. When in doubt, escalate to your security / AI governance team.</p>
+</main>
+
+<script>
+// FAKE example data only - invented for demonstration, no real person or credential.
+const LEAKY_EXAMPLE = "Hi, can you draft a follow-up email for our customer John Doe? " +
+  "His SSN is 123-45-6789, email john.doe@example.com, phone (555) 123-4567. " +
+  "For reference our internal API key is sk-FAKE1234567890EXAMPLE - do not share it. " +
+  "This is for our confidential internal project codename Project Nightingale.";
+const SAFE_EXAMPLE = "Write a friendly social media post announcing our new public product " +
+  "launch event next Tuesday. All are welcome to attend and learn about the features " +
+  "we have already published on our website.";
+
+const $ = (id) => document.getElementById(id);
+
+$("leaky_btn").addEventListener("click", () => {
+  $("prompt_text").value = LEAKY_EXAMPLE;
+  $("destination_tool").value = "Public ChatGPT";
+  $("data_context").value = "customer support follow-up";
+});
+$("safe_btn").addEventListener("click", () => {
+  $("prompt_text").value = SAFE_EXAMPLE;
+  $("destination_tool").value = "Public ChatGPT";
+  $("data_context").value = "public marketing copy";
+});
+$("copy_btn").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText($("redacted_text").textContent);
+    $("copy_note").textContent = "Copied.";
+  } catch (e) {
+    $("copy_note").textContent = "Copy failed - select the text and copy manually.";
+  }
+});
+
+function bannerClass(decision) {
+  if (decision === "Allow") return "banner allow";
+  if (decision === "Redact & Send") return "banner redact";
+  return "banner block";
+}
+function meterColor(score) {
+  if (score >= 75) return "#b3261e";
+  if (score >= 50) return "#d35400";
+  if (score >= 25) return "#b58900";
+  return "#1e7e34";
+}
+function esc(s) {
+  const d = document.createElement("div");
+  d.textContent = s == null ? "" : String(s);
+  return d.innerHTML;
+}
+
+$("check_btn").addEventListener("click", async () => {
+  const btn = $("check_btn");
+  $("error_box").style.display = "none";
+  $("results").style.display = "none";
+  btn.disabled = true; btn.textContent = "Checking...";
+  try {
+    const resp = await fetch("/api/check", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        prompt_text: $("prompt_text").value,
+        destination_tool: $("destination_tool").value,
+        data_context: $("data_context").value
+      })
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      $("error_box").textContent = data.error || "Something went wrong. Please try again.";
+      $("error_box").style.display = "block";
+      return;
+    }
+    $("banner").className = bannerClass(data.decision);
+    $("decision_text").textContent = data.decision;
+    $("mode_text").textContent = data.mode === "demo"
+      ? "Mode: DEMO (local rule-based analyzer - no API key configured)"
+      : "Mode: live model (" + data.mode + ")";
+    $("risk_score").textContent = data.risk_score;
+    $("risk_level").textContent = data.risk_level;
+    const meter = $("meter");
+    meter.style.width = data.risk_score + "%";
+    meter.style.background = meterColor(data.risk_score);
+    $("summary").textContent = data.summary;
+    const findingsBox = $("findings");
+    if (!data.findings || data.findings.length === 0) {
+      findingsBox.innerHTML = '<p class="small">No findings - nothing was flagged in this text.</p>';
+    } else {
+      findingsBox.innerHTML = data.findings.map(f =>
+        '<div class="card">' +
+          '<h3>' + esc(f.category) + '</h3>' +
+          '<p><span class="tag sev">Severity: ' + esc(f.severity) + '</span>' +
+          '<code class="snippet">' + esc(f.snippet) + '</code></p>' +
+          '<p>' + esc(f.explanation) + '</p>' +
+          '<p><strong>Recommendation:</strong> ' + esc(f.recommendation) + '</p>' +
+        '</div>'
+      ).join("");
+    }
+    $("redacted_text").textContent = data.redacted_text;
+    $("policy_reason").textContent = data.policy_reason;
+    $("results").style.display = "block";
+    $("results").scrollIntoView({behavior: "smooth", block: "start"});
+  } catch (e) {
+    $("error_box").textContent = "Could not reach the server. Is the Flask app running?";
+    $("error_box").style.display = "block";
+  } finally {
+    btn.disabled = false; btn.textContent = "Check Prompt";
+  }
+});
+</script>
+</body>
+</html>
