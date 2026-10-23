@@ -7,6 +7,17 @@ personal data, secrets and confidential company information, gives you a
 redacted safe version, and decides: **Allow**, **Redact & Send**, or
 **Block & Escalate**.
 
+## Problem
+
+People paste customer emails, internal plans, API keys and SSNs into public AI
+tools every day, usually by accident. Once the text is sent, the company can't
+get it back. Enterprise data-loss tools exist, but they're built for IT teams,
+not for an employee who wants a quick answer to three questions:
+
+1. What in this text is risky, and why?
+2. What would a safe version look like?
+3. Should I send it, send the redacted version, or escalate it?
+
 ## How it works
 
 1. Paste your text, choose where it's going (**Public AI tool** or
@@ -20,6 +31,12 @@ redacted safe version, and decides: **Allow**, **Redact & Send**, or
 With no API key, a local rule-based **demo mode** returns the same JSON, so
 the app always works.
 
+**The role of the AI:** the model acts as the governance analyst. It makes the
+judgment a keyword filter can't. For example, the same product name can be
+harmless in public marketing copy but confidential in an unreleased roadmap.
+It also writes the redacted version and explains the policy behind its
+decision, not just a yes/no.
+
 | File | Purpose |
 |---|---|
 | `app.py` | Flask server: `/`, `GET /health`, `POST /api/check` |
@@ -30,14 +47,22 @@ the app always works.
 
 ## Prompt engineering
 
-The template uses three patterns:
+`prompts/prompt_template.txt` uses three course patterns, each in its own
+labeled section:
 
-- **Persona:** the model acts as an AI governance / data protection analyst.
-- **Few-Shot:** three examples (safe → Allow, email + phone → Redact & Send,
-  API key + SSNs → Block & Escalate) teach it to judge by context, not
-  keywords.
+- **Persona:** the model plays an AI governance and data protection analyst.
+  *Effect:* it's cautious about secrets, explains why something is risky,
+  and writes in plain language for non-technical users, instead of giving a
+  generic "is this safe?" answer.
+- **Few-Shot:** three examples anchor the decisions: safe public copy →
+  Allow; personal email and phone → Redact & Send; API key and SSNs → Block &
+  Escalate. *Effect:* scores and decisions stay consistent, and borderline
+  text is judged by context, not keywords.
 - **Template:** the model must reply with a single JSON object in a fixed
-  schema, which the server validates before the page displays it.
+  schema. *Effect:* the page can always render the result as a decision
+  banner, findings and a copyable safe version. The server validates the JSON
+  (`llm_client.normalize_result`), so a bad reply shows a clear error rather
+  than a broken page.
 
 ## Run it
 
@@ -98,6 +123,15 @@ Returns:
 pip install -r requirements-dev.txt
 python -m pytest tests -q
 ```
+
+## Impact and future work
+
+Catching a leak before it's sent is much cheaper than handling it afterwards.
+Next steps:
+
+- A browser extension that checks text as you paste it into ChatGPT or Gemini
+- Company policy packs: load an organization's own data rules into the prompt
+- Anonymized audit logs so security teams can see leak trends
 
 ## Limitations
 
